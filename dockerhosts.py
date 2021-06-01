@@ -14,6 +14,8 @@ import shutil
 import signal
 import time
 
+from docker import DockerClient, APIClient
+
 
 DOCKERHOSTS_CONF_JSON = "/etc/dockerhosts.conf.json"
 
@@ -58,7 +60,10 @@ class DockerHostsService:
         self.containers_thread = None
         self.stopping = False
 
-        self.previous_containers = None
+        self.previous_hostinfo = {}
+        # FIXME the base url ought to be configurable I suppose
+        self.client = DockerClient(base_url='unix://var/run/docker.sock')
+        self.api_client = APIClient(base_url='unix://var/run/docker.sock')
 
         if not os.path.exists(self.config.hosts_folder):
             os.makedirs(self.config.hosts_folder)
@@ -114,56 +119,99 @@ class DockerHostsService:
     def get_running_containers(self) -> list:
         """ Returns list of running containers """
         container_ids: list
-        command = self.config.docker_executable + " ps -q"
-        popen = Popen(command, shell=True, stdout=PIPE)
-        with popen.stdout as stream:
-            container_ids = stream.read().decode('utf8') \
-                .strip() \
-                .split("\n")
-        container_ids = [c.strip() for c in container_ids if c]
+
+        # get ids of running containers only, on all networks
+        entries = self.client.containers.list()
+        container_ids = [entry.short_id for entry in entries]
         container_ids.sort()
         return container_ids
 
-    def inspect_containers(self, container_ids: list) -> list:
-        """ Returns containers information """
-        command = self.config.docker_executable + " inspect " + " ".join(container_ids)
-        popen = Popen(command, shell=True, stdout=PIPE)
-        with popen.stdout as stream:
-            containers = json.load(stream)
+    def inspect_container(self, id_to_inspect: list) -> list:
+        """ Returns container information """
+        container_details = self.api_client.inspect_container(id_to_inspect)
+        return container_details
 
-        return containers
+    def get_container_names_addr(self, c_id) -> list:
+        """for a given container id, return a list with the ip addr and the hostname
+        and alias, as well as the fqdn hostname and alias if they are different"""
+        container_data = self.inspect_container(c_id)
+
+        hostname = container_data["Config"]["Hostname"]
+        hostname_fqdn = None
+        if container_data["Config"]["Domainname"]:
+            hostname_fqdn = hostname + "." + container_data["Config"]["Domainname"]
+        alias = container_data["Name"].lstrip("/")
+        alias_fqdn = None
+        if container_data["Config"]["Domainname"]:
+            alias_fqdn = alias + "." + container_data["Config"]["Domainname"]
+
+        networks = list(container_data["NetworkSettings"]["Networks"].values())
+        hostaddr = networks[0]["IPAddress"]
+
+        names_addr = [hostaddr, hostname, alias]
+        if hostname_fqdn:
+            names_addr.append(hostname_fqdn)
+        if alias_fqdn:
+            names_addr.append(alias_fqdn)
+        return names_addr
+
+    def wait_must_exit(self, seconds=2) -> bool:
+        """sleep the designated time and return True
+        if we should exit after, False otherwise"""
+        for _ in range(1, seconds+10):
+            time.sleep(0.1)
+            if self.stopping:
+                return True
+        return False
 
     def update_hosts_file(self):
         """Writes hosts file into temporary folder"""
         while not self.stopping:
-            container_ids = self.get_running_containers()
+            try:
+                container_ids = self.get_running_containers()
+            except ConnectionRefusedError:
+                # no docker process? check again in a minute
+                if self.wait_must_exit(60):
+                    break
 
-            if self.previous_containers != container_ids:
-                self.previous_containers = container_ids
+            if sorted(self.previous_hostinfo.keys()) != container_ids:
+                ids_to_check = [c_id for c_id in container_ids
+                                if c_id not in self.previous_hostinfo]
 
                 filename = self.config.hosts_folder + "/hosts"
-                lines = ["#  " + filename]
+                entries = {}
 
-                if container_ids:
-                    print("Running containers: " + " ".join(container_ids))
-                    containers_data = self.inspect_containers(container_ids)
+                if ids_to_check:
+                    # FIXME this should be logged at level INFO
+                    # print("Running containers: " + " ".join(container_ids))
 
-                    for container in containers_data:
-                        hostname = ".".join([
-                            container["Config"]["Hostname"],
-                            container["Config"]["Domainname"]
-                        ])
-                        networks = list(container["NetworkSettings"]["Networks"].values())
-                        hostaddr = networks[0]["IPAddress"]
-                        lines.append(hostaddr + "\t" + hostname)
+                    # inspect all running containers for which we do not
+                    # already have info, collect hostname and ip addr
+                    try:
+                        for c_id in ids_to_check:
+                            entries[c_id] = self.get_container_names_addr(c_id)
+                    except ConnectionRefusedError:
+                        # docker process went away? start over, try again in a minute
+                        if self.wait_must_exit(60):
+                            break
+
+                    # collect host name, alias and ip addr from old info for containers
+                    # still running
+                    for c_id in self.previous_hostinfo:
+                        if c_id in container_ids:
+                            entries[c_id] = self.previous_hostinfo[c_id]
+
+                # convert host info to lines of text for dnsmasq file
+                lines = ["\t".join(entries[c_id]) for c_id in entries]
 
                 with open(filename, 'w') as the_file:
+                    header = "#  " + filename + "\n"
+                    the_file.write(header)
                     the_file.write("\n".join(lines) + "\n")
+                self.previous_hostinfo = entries
 
-            for _ in range(1, 20):
-                time.sleep(0.1)
-                if self.stopping:
-                    break
+            if self.wait_must_exit():
+                break
 
 
 def main():
