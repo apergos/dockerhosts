@@ -51,7 +51,6 @@ PING defaultset-snapshot-02.defaultset.lan (172.16.0.4) 56(84) bytes of data.
 2 packets transmitted, 2 received, 0% packet loss, time 1001ms
 rtt min/avg/max/mdev = 0.064/0.108/0.152/0.044 ms
 ```
-Note that the current config does not include a max TTL for dnsmasq, so the default of 2 hours (!) applies. I should fix that.
 
 ### Requirements
 
@@ -109,7 +108,7 @@ The script starts dnsmasq, which listens on 127.0.0.54, port 53, and reads the f
 
 In the meantime, the script polls docker every two seconds via the docker api, (this should probably be configurable, oh well), and retrieves the names and ids of all containers, adding them to the above file. The script also writes the names qualified by the network name to which each container is attached.
 
-When the list of containers changes, containers missing from the new list will be removed from the file, and containers new in the list will be checked for their IPS, and new entries added.
+When the list of containers changes, containers missing from the new list will be removed from the file, and containers new in the list will be checked for their IPS, and new entries added. The dnsmasq process will also be sent a SIGHUP to clear its cache; there is no mechanism for dnsmasq to drop entries removed from the file, and this is by design. See https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=798653
 
 When there are no containers running, the file will be empty except for a header line containing the name of the file.
 

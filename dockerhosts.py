@@ -71,6 +71,15 @@ class DockerHostsService:
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.stop)
 
+    def reload_dnsmasq(self):
+        """Force dnsmasq to reload. We hope. This is needed
+        whenever docker removes a container, so that the stale
+        dns record is not served forever. See e.g.
+        https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=798653"""
+        if (self.dnsmasq_process is not None) and (self.dnsmasq_process.poll() is not None):
+            print("Reloading dnsmasq.")
+            self.dnsmasq_process.send_signal(signal.SIGHUP)
+
     def stop(self, _signum, _frame):
         """Stops threads and cleanup resources"""
         print("Stop signal received.")
@@ -181,6 +190,9 @@ class DockerHostsService:
                 filename = self.config.hosts_folder + "/hosts"
                 entries = {}
 
+                # do we need to reload dnsmaq? we'll see
+                reload_required = False
+
                 if ids_to_check:
                     # FIXME this should be logged at level INFO
                     # print("Running containers: " + " ".join(container_ids))
@@ -201,6 +213,13 @@ class DockerHostsService:
                         if c_id in container_ids:
                             entries[c_id] = self.previous_hostinfo[c_id]
 
+                    # if there were containers running that aren't now,
+                    # we must reload dnsmasq so it tosses those entries,
+                    # once the new file is written out
+                    for c_id in self.previous_hostinfo:
+                        if c_id not in container_ids:
+                            reload_required = True
+
                 # convert host info to lines of text for dnsmasq file
                 lines = ["\t".join(entries[c_id]) for c_id in entries]
 
@@ -209,6 +228,9 @@ class DockerHostsService:
                     the_file.write(header)
                     the_file.write("\n".join(lines) + "\n")
                 self.previous_hostinfo = entries
+
+                if reload_required:
+                    self.reload_dnsmasq()
 
             if self.wait_must_exit():
                 break
