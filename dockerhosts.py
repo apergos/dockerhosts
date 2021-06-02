@@ -9,15 +9,18 @@ from subprocess import PIPE
 import threading
 import json
 import os
+import sys
 import shutil
 
 import signal
 import time
 
 from docker import DockerClient, APIClient
+from docker.errors import DockerException
 
 
 DOCKERHOSTS_CONF_JSON = "/etc/dockerhosts.conf.json"
+
 
 class DockerHostsService:
     """Service implementation"""
@@ -26,9 +29,10 @@ class DockerHostsService:
         """Service configuration"""
         def __init__(self):
             self.hosts_folder: str
-            self.docker_executable: str
             self.dnsmasq_executable: str
             self.dnsmasq_parameters: list
+            self.no_docker_wait: int
+            self.between_updates_wait: int
 
             conf_data: dict
 
@@ -39,7 +43,8 @@ class DockerHostsService:
                 conf_data = dict()
 
             self.hosts_folder = conf_data.get("hosts-folder", "/var/run/docker-hosts")
-            self.docker_executable = conf_data.get("docker-executable", "/usr/bin/docker")
+            self.no_docker_wait = conf_data.get("no-docker_wait", 60)
+            self.between_updates_wait = conf_data.get("between_updates_wait", 2)
             self.dnsmasq_executable = conf_data.get("dnsmasq-executable", "/usr/sbin/dnsmasq")
             self.dnsmasq_parameters = conf_data.get("dnsmasq-parameters", [
                 "--no-daemon",
@@ -61,9 +66,10 @@ class DockerHostsService:
         self.stopping = False
 
         self.previous_hostinfo = {}
-        # FIXME the base url ought to be configurable I suppose
-        self.client = DockerClient(base_url='unix://var/run/docker.sock')
-        self.api_client = APIClient(base_url='unix://var/run/docker.sock')
+
+        self.client = None
+        self.api_client = None
+        self.setup_docker_session()
 
         if not os.path.exists(self.config.hosts_folder):
             os.makedirs(self.config.hosts_folder)
@@ -71,12 +77,25 @@ class DockerHostsService:
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.stop)
 
+    def setup_docker_session(self):
+        """initialize the docker client and api client sessions,
+        bailing if we receive sigkill"""
+        while not self.client or not self.api_client:
+            try:
+                # FIXME the base url ought to be configurable I suppose
+                if not self.client:
+                    self.client = DockerClient(base_url='unix://var/run/docker.sock')
+                if not self.api_client:
+                    self.api_client = APIClient(base_url='unix://var/run/docker.sock')
+            except DockerException:
+                if self.wait_must_exit(self.config.no_docker_wait):
+                    sys.exit(1)
+
     def reload_dnsmasq(self):
-        """Force dnsmasq to reload. We hope. This is needed
-        whenever docker removes a container, so that the stale
-        dns record is not served forever. See e.g.
+        """Force dnsmasq to reload. We hope. This is needed whenever docker removes
+        a container, so that the stale dns record is not served forever. See e.g.
         https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=798653"""
-        if (self.dnsmasq_process is not None) and (self.dnsmasq_process.poll() is not None):
+        if self.dnsmasq_process is not None:
             print("Reloading dnsmasq.")
             self.dnsmasq_process.send_signal(signal.SIGHUP)
 
@@ -94,7 +113,7 @@ class DockerHostsService:
             print("Dnsmasq exited.")
 
         # Stop containers listener
-        if not self.containers_thread is None:
+        if self.containers_thread is not None:
             self.containers_thread.join()
 
         # Remove temporary folder
@@ -104,7 +123,7 @@ class DockerHostsService:
     def start(self):
         """Run service"""
         # Start containers thread
-        self.containers_thread = threading.Thread(target=self.update_hosts_file)
+        self.containers_thread = threading.Thread(target=self.update_hosts_file_as_needed)
         self.containers_thread.start()
 
         # Start dnsmasq process
@@ -135,7 +154,7 @@ class DockerHostsService:
         container_ids.sort()
         return container_ids
 
-    def inspect_container(self, id_to_inspect: list) -> list:
+    def inspect_container(self, id_to_inspect) -> list:
         """ Returns container information """
         container_details = self.api_client.inspect_container(id_to_inspect)
         return container_details
@@ -166,73 +185,101 @@ class DockerHostsService:
 
     def wait_must_exit(self, seconds=2) -> bool:
         """sleep the designated time and return True
-        if we should exit after, False otherwise"""
+        if we should exit afterwards, False otherwise"""
         for _ in range(1, seconds+10):
             time.sleep(0.1)
             if self.stopping:
                 return True
         return False
 
-    def update_hosts_file(self):
-        """Writes hosts file into temporary folder"""
+    def some_containers_missing(self, current_container_ids: list) -> bool:
+        '''if there are containers that were running
+        previously and now are missing, return True,
+        otherwise False'''
+        for c_id in self.previous_hostinfo:
+            if c_id not in current_container_ids:
+                return True
+        return False
+
+    def write_hostsfile(self, entries: dict):
+        """convert entries into lines of text
+        and write them to the hosts file"""
+        lines = ["\t".join(entries[c_id]) for c_id in entries]
+        filename = self.config.hosts_folder + "/hosts"
+        with open(filename, 'w') as hostsfile:
+            header = "#  " + filename + "\n"
+            hostsfile.write(header)
+            hostsfile.write("\n".join(lines) + "\n")
+
+    def do_hostsfile_update(self, container_ids: list):
+        """Write new hosts file"""
+        ids_to_check = [c_id for c_id in container_ids
+                        if c_id not in self.previous_hostinfo]
+
+        entries = {}
+
+        if not ids_to_check:
+            return
+
+        # FIXME this should be logged at level INFO
+        # print("Running containers: " + " ".join(container_ids))
+
+        # inspect all newly running containers, collect hostname and ip addr
+        try:
+            for c_id in ids_to_check:
+                entries[c_id] = self.get_container_names_addr(c_id)
+        except ConnectionRefusedError:
+            # docker process went away? start over, try again in a bit
+            # FIXME really should toss session and get a new one,
+            # in case docker version changes. oh well
+            if self.wait_must_exit(self.config.no_docker_wait):
+                return
+
+        # for containers that were already running last check,
+        # get host name, alias and ip addr from cached info
+        for c_id in self.previous_hostinfo:
+            if c_id in container_ids:
+                entries[c_id] = self.previous_hostinfo[c_id]
+
+        self.write_hostsfile(entries)
+
+        # if some containers are no longer running, we must reload
+        # dnsmasq so it clears its cache
+        if self.some_containers_missing(container_ids):
+            self.reload_dnsmasq()
+
+        self.previous_hostinfo = entries
+
+    def update_hosts_file_as_needed(self):
+        """Writes hosts file into temporary folder with new contents, when
+        list of running containers changes"""
+
+        # we'll assume that docker is up and running to start with
+        docker_running = True
+
         while not self.stopping:
             try:
                 container_ids = self.get_running_containers()
-            except ConnectionRefusedError:
-                # no docker process? check again in a minute
-                if self.wait_must_exit(60):
-                    break
-
-            if sorted(self.previous_hostinfo.keys()) != container_ids:
-                ids_to_check = [c_id for c_id in container_ids
-                                if c_id not in self.previous_hostinfo]
-
-                filename = self.config.hosts_folder + "/hosts"
-                entries = {}
-
-                # do we need to reload dnsmaq? we'll see
-                reload_required = False
-
-                if ids_to_check:
-                    # FIXME this should be logged at level INFO
-                    # print("Running containers: " + " ".join(container_ids))
-
-                    # inspect all running containers for which we do not
-                    # already have info, collect hostname and ip addr
-                    try:
-                        for c_id in ids_to_check:
-                            entries[c_id] = self.get_container_names_addr(c_id)
-                    except ConnectionRefusedError:
-                        # docker process went away? start over, try again in a minute
-                        if self.wait_must_exit(60):
-                            break
-
-                    # collect host name, alias and ip addr from old info for containers
-                    # still running
-                    for c_id in self.previous_hostinfo:
-                        if c_id in container_ids:
-                            entries[c_id] = self.previous_hostinfo[c_id]
-
-                    # if there were containers running that aren't now,
-                    # we must reload dnsmasq so it tosses those entries,
-                    # once the new file is written out
-                    for c_id in self.previous_hostinfo:
-                        if c_id not in container_ids:
-                            reload_required = True
-
-                # convert host info to lines of text for dnsmasq file
-                lines = ["\t".join(entries[c_id]) for c_id in entries]
-
-                with open(filename, 'w') as the_file:
-                    header = "#  " + filename + "\n"
-                    the_file.write(header)
-                    the_file.write("\n".join(lines) + "\n")
-                self.previous_hostinfo = entries
-
-                if reload_required:
+            except IOError:
+                # docker process is gone, clear the file and our cache of entries
+                # if we didn't already do so
+                if docker_running:
+                    docker_running = False
+                    self.write_hostsfile({})
                     self.reload_dnsmasq()
+                    self.previous_hostinfo = {}
+                # and wait a bit before the next check
+                # FIXME really should toss session and get a new one,
+                # in case docker version changes. oh well
+                if self.wait_must_exit(self.config.no_docker_wait):
+                    break
+                continue
 
-            if self.wait_must_exit():
+            docker_running = True
+            if sorted(self.previous_hostinfo.keys()) != container_ids:
+                self.do_hostsfile_update(container_ids)
+
+            if self.wait_must_exit(self.config.between_updates_wait):
                 break
 
 

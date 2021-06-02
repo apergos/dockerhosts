@@ -106,11 +106,13 @@ DNS=127.0.0.54
 
 The script starts dnsmasq, which listens on 127.0.0.54, port 53, and reads the file /var/run/docker-hosts/hosts for name resolution.
 
-In the meantime, the script polls docker every two seconds via the docker api, (this should probably be configurable, oh well), and retrieves the names and ids of all containers, adding them to the above file. The script also writes the names qualified by the network name to which each container is attached.
+In the meantime, the script polls docker every two seconds (configurable) via the docker api, and retrieves the names and ids of all containers, adding them to the above file. The script also writes the names qualified by the network name to which each container is attached.
 
 When the list of containers changes, containers missing from the new list will be removed from the file, and containers new in the list will be checked for their IPS, and new entries added. The dnsmasq process will also be sent a SIGHUP to clear its cache; there is no mechanism for dnsmasq to drop entries removed from the file, and this is by design. See https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=798653
 
 When there are no containers running, the file will be empty except for a header line containing the name of the file.
+
+If the docker process is not running when this service starts, no hosts file will be created until the docker daemon finally starts up. It can take up to 60 seconds (configurable) for this service to notice that the docker daemon has become available.
 
 ### Recommended use
 
