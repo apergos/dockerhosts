@@ -201,10 +201,29 @@ class DockerHostsService:
                 return True
         return False
 
+    @staticmethod
+    def entries_to_lines(entries: dict) -> list:
+        """convert container info entries to lines to be written
+        to the hosts files
+        each entry starts with the address followed by a number of
+        hostnames"""
+        lines = []
+        for c_id in entries:
+            # keep the address
+            will_write = [entries[c_id][0]]
+            # keep everything but single label names
+            will_write.extend([field for field in entries[c_id][1:] if '.' in field])
+            # there are only single label names. write the line as a comment
+            line = "\t".join(will_write)
+            if len(will_write) == 1:
+                line = "# " + line
+            lines.append(line)
+        return lines
+
     def write_hostsfile(self, entries: dict):
         """convert entries into lines of text
         and write them to the hosts file"""
-        lines = ["\t".join(entries[c_id]) for c_id in entries]
+        lines = self.entries_to_lines(entries)
         filename = self.config.hosts_folder + "/hosts"
         with open(filename, 'w') as hostsfile:
             header = "#  " + filename + "\n"

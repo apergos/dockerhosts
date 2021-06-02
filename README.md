@@ -106,7 +106,7 @@ DNS=127.0.0.54
 
 The script starts dnsmasq, which listens on 127.0.0.54, port 53, and reads the file /var/run/docker-hosts/hosts for name resolution.
 
-In the meantime, the script polls docker every two seconds (configurable) via the docker api, and retrieves the names and ids of all containers, adding them to the above file. The script also writes the names qualified by the network name to which each container is attached.
+In the meantime, the script polls docker every two seconds (configurable) via the docker api, and retrieves the names and ids of all containers. The script then writes these names, as long as they are not single label names (as long as they contain a dot), to the hosts file. It also writes these same names with any specified container domain name added, as long as these names are different.
 
 When the list of containers changes, containers missing from the new list will be removed from the file, and containers new in the list will be checked for their IPS, and new entries added. The dnsmasq process will also be sent a SIGHUP to clear its cache; there is no mechanism for dnsmasq to drop entries removed from the file, and this is by design. See https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=798653
 
@@ -116,10 +116,10 @@ If the docker process is not running when this service starts, no hosts file wil
 
 ### Recommended use
 
-Your resolver will likely not route resolution of unqualified hostnames anywhere useful. It is recommended that you add your containers to a network with a name ending in a reserved TLD such as .lan, for example "test.lan". In this case, all entries in /var/run/docker-hosts/hosts will be listed in short form but also with <containername>.test.lan and <containerid>.test.lan as aliases. Once you have edited /etc/systemd/resolved.conf to add the new dnsmasq process to the DNS entry as described above in 'Configuration', you should be able to reference your containers from the local host by providing the fully qualified name, either based on the container name or the container id.
+It is recommended that you add your containers to a network with a name ending in a reserved TLD such as .lan, for example "test.lan". In this case, all entries in /var/run/docker-hosts/hosts will be listed in short form but also with <containername>.test.lan and <containerid>.test.lan as aliases. Once you have edited /etc/systemd/resolved.conf to add the new dnsmasq process to the DNS entry as described above in 'Configuration', you should be able to reference your containers from the local host by providing the fully qualified name, either based on the container name or the container id.
+
+Note that single label names (names without a domain) will not be resolved by systemd-resolved; this is a design decision. See https://github.com/systemd/systemd/issues/13763 As such, single label names are not written into the hosts file. If a container has only single label names, an entry will be written as a comment, to let users know that the container setup is wrong for this service.
 
 ### Issues
 
-I'm sure there are many. In particular, nslookup does NOT work with the fqdn or with the short name either, although dig and ssh and probably most everything else does just fine.
-
-Currently dns doesn't resolve for the short name of a container, from outside of the container. Because I expect to have multiple test docker networks in play at once, and adding each of these as a search domain to systemd-resolved would be tedious, I'm ignoring this for now.
+I'm sure there are many. In particular, nslookup does NOT work with the fqdn of a container, although dig and ssh and probably most everything else does just fine.
