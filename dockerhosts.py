@@ -43,8 +43,9 @@ class DockerHostsService:
                 conf_data = dict()
 
             self.hosts_folder = conf_data.get("hosts-folder", "/var/run/docker-hosts")
-            self.no_docker_wait = conf_data.get("no-docker_wait", 60)
-            self.between_updates_wait = conf_data.get("between_updates_wait", 2)
+            self.no_docker_wait = conf_data.get("no-docker-wait", 60)
+            self.between_updates_wait = conf_data.get("between-updates-wait", 2)
+            self.docker_socket = conf_data.get("docker-socket", "unix://var/run/docker.sock")
             self.dnsmasq_executable = conf_data.get("dnsmasq-executable", "/usr/sbin/dnsmasq")
             self.dnsmasq_parameters = conf_data.get("dnsmasq-parameters", [
                 "--no-daemon",
@@ -82,11 +83,10 @@ class DockerHostsService:
         bailing if we receive sigkill"""
         while not self.client or not self.api_client:
             try:
-                # FIXME the base url ought to be configurable I suppose
                 if not self.client:
-                    self.client = DockerClient(base_url='unix://var/run/docker.sock')
+                    self.client = DockerClient(base_url=self.config.docker_socket)
                 if not self.api_client:
-                    self.api_client = APIClient(base_url='unix://var/run/docker.sock')
+                    self.api_client = APIClient(base_url=self.config.docker_socket)
             except DockerException:
                 if self.wait_must_exit(self.config.no_docker_wait):
                     sys.exit(1)

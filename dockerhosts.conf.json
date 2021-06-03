@@ -2,6 +2,7 @@
     "hosts-folder": "/var/run/docker-hosts",
     "no-docker-wait": 60,
     "between-updates-wait": 2,
+    "docker-socket": "unix://var/run/docker.sock",
     "dnsmasq-executable": "/usr/sbin/dnsmasq",
     "dnsmasq-parameters": [
         "--no-daemon",
