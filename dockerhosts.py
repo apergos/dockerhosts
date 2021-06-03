@@ -249,8 +249,6 @@ class DockerHostsService:
                 entries[c_id] = self.get_container_names_addr(c_id)
         except ConnectionRefusedError:
             # docker process went away? start over, try again in a bit
-            # FIXME really should toss session and get a new one,
-            # in case docker version changes. oh well
             if self.wait_must_exit(self.config.no_docker_wait):
                 return
 
@@ -288,8 +286,6 @@ class DockerHostsService:
                     self.reload_dnsmasq()
                     self.previous_hostinfo = {}
                 # and wait a bit before the next check
-                # FIXME really should toss session and get a new one,
-                # in case docker version changes. oh well
                 if self.wait_must_exit(self.config.no_docker_wait):
                     break
                 continue

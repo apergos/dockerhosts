@@ -122,4 +122,8 @@ Note that single label names (names without a domain) will not be resolved by sy
 
 ### Issues
 
-I'm sure there are many. In particular, nslookup does NOT work with the fqdn of a container, although dig and ssh and probably most everything else does just fine.
+Depending on your dns/nsswitch/resolved configuration, nslookup may not be able to resolve fqdn container names, although dig and ssh and probably most everything else will be fine.
+
+If the docker daemon is updated to use a new (and incompatible) API version, this service should be restarted; it will not detect the update on its own.
+
+Dnsmasq cannot handle multiple reloads within a few seconds; it will wind up in a borked state and need to be restarted. For that reason, this script is not suitable for use in an environment where docker containers are created and removed every second or two. For slower paced installations, and in particular, for use to facilitate name resolution in a local development environment or testbed, it should be fine.
