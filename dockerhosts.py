@@ -8,10 +8,10 @@ from subprocess import Popen
 from subprocess import PIPE
 import threading
 import json
+import logging
 import os
 import sys
 import shutil
-
 import signal
 import time
 
@@ -96,21 +96,21 @@ class DockerHostsService:
         a container, so that the stale dns record is not served forever. See e.g.
         https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=798653"""
         if self.dnsmasq_process is not None:
-            print("Reloading dnsmasq.")
+            logging.warning("Reloading dnsmasq.")
             self.dnsmasq_process.send_signal(signal.SIGHUP)
 
     def stop(self, _signum, _frame):
         """Stops threads and cleanup resources"""
-        print("Stop signal received.")
+        logging.warning("Stop signal received.")
         self.stopping = True
 
         # Stop dnsmasq thread
         if (self.dnsmasq_process is not None) and (self.dnsmasq_process.poll() is not None):
-            print("Stopping dnsmasq.")
+            logging.warning("Stopping dnsmasq.")
             self.dnsmasq_process.send_signal(signal.SIGKILL)
             self.dnsmasq_process.kill()
             self.dnsmasq_process.wait()
-            print("Dnsmasq exited.")
+            logging.warning("Dnsmasq exited.")
 
         # Stop containers listener
         if self.containers_thread is not None:
@@ -240,8 +240,7 @@ class DockerHostsService:
         if not ids_to_check:
             return
 
-        # FIXME this should be logged at level INFO
-        # print("Running containers: " + " ".join(container_ids))
+        logging.debug("Running containers: %s", " ".join(container_ids))
 
         # inspect all newly running containers, collect hostname and ip addr
         try:
