@@ -71,9 +71,15 @@ sudo ./install_macos.sh
 ```
 This command will install `dockerhosts` as a systemd service, along with the executable and the configuration file.
 
-### Uninstall
+### Uninstall (Linux only)
 ```
 sudo ./uninstall.sh
+```
+This command will remove `the dockerhosts` service and all associated files.
+
+### Uninstall (MacOS)
+```
+sudo ./uninstall_macos.sh
 ```
 This command will remove `the dockerhosts` service and all associated files.
 
