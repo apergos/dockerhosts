@@ -59,9 +59,15 @@ rtt min/avg/max/mdev = 0.064/0.108/0.152/0.044 ms
 3. Docker
 4. docker-py (docker SDK for python)
 
-### Install
+### Install (Linux only)
 ```
 sudo ./install.sh
+```
+This command will install `dockerhosts` as a systemd service, along with the executable and the configuration file.
+
+### Install (MacOS)
+```
+sudo ./install_macos.sh
 ```
 This command will install `dockerhosts` as a systemd service, along with the executable and the configuration file.
 
@@ -71,7 +77,7 @@ sudo ./uninstall.sh
 ```
 This command will remove `the dockerhosts` service and all associated files.
 
-### Configuration
+### Configuration (Linux only)
 
 This tool uses `dnsmasq` to provide associations between container hosnames and theirs IP addresses.
 By default dnsmasq listens on 127.0.0.54:53, to make this DNS available to the system,
