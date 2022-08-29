@@ -21,12 +21,6 @@ cp "${WORKDIR}/dockerhosts.conf.json.mac" "/usr/local/etc/dockerhosts.conf.json"
 echo "Load service: launchctl load /Library/LaunchDaemons/dockerhosts.plist"
 launchctl load /Library/LaunchDaemons/dockerhosts.plist
 
-echo "Enable service: launchctl enable system/dockerhosts"
-launchctl enable system/dockerhosts
-
-echo "Starting service: launchctl start dockerhosts"
-launchctl start system/dockerhosts
-
 echo "Checking the results... Please review:"
 launchctl print system/dockerhosts
 
