@@ -11,7 +11,7 @@ echo "Stopping service"
 launchctl stop dockerhosts
 
 echo "Disabling service"
-launchctl disable dockerhosts
+launchctl unload /Library/LaunchDaemons/dockerhosts.plist
 
 if [ -f "/Library/LaunchDaemons/dockerhosts.plist" ] ; then
     echo "Uninstall file /Library/LaunchDaemons/dockerhosts.plist"
