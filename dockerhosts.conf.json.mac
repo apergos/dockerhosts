@@ -1,5 +1,5 @@
 {
-    "hosts-folder": "/var/run/docker-hosts",
+    "hosts_file":"/var/run/hosts",
     "no-docker-wait": 60,
     "between-updates-wait": 2,
     "docker-socket": "unix://var/run/docker.sock",
@@ -11,6 +11,6 @@
         "--no-hosts",
         "--listen-address=127.0.0.54",
         "--port=53",
-        "--hostsdir="
+        "--addn-hosts="
     ]
 }

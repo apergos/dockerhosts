@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import sys
-import shutil
 import signal
 import time
 
@@ -28,7 +27,7 @@ class DockerHostsService:
     class Config:
         """Service configuration"""
         def __init__(self):
-            self.hosts_folder: str
+            self.hosts_file: str
             self.dnsmasq_executable: str
             self.dnsmasq_parameters: list
             self.no_docker_wait: int
@@ -42,7 +41,7 @@ class DockerHostsService:
             else:
                 conf_data = dict()
 
-            self.hosts_folder = conf_data.get("hosts-folder", "/var/run/docker-hosts")
+            self.hosts_file = conf_data.get("hosts_file", "/var/run/hosts")
             self.no_docker_wait = conf_data.get("no-docker-wait", 60)
             self.between_updates_wait = conf_data.get("between-updates-wait", 2)
             self.docker_socket = conf_data.get("docker-socket", "unix://var/run/docker.sock")
@@ -72,8 +71,8 @@ class DockerHostsService:
         self.api_client = None
         self.setup_docker_session()
 
-        if not os.path.exists(self.config.hosts_folder):
-            os.makedirs(self.config.hosts_folder)
+        if not os.path.exists(self.config.hosts_file):
+            open(self.config.hosts_file, 'w').close()
 
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.stop)
@@ -116,9 +115,9 @@ class DockerHostsService:
         if self.containers_thread is not None:
             self.containers_thread.join()
 
-        # Remove temporary folder
-        if os.path.exists(self.config.hosts_folder):
-            shutil.rmtree(self.config.hosts_folder)
+        # Remove temporary file
+        if os.path.exists(self.config.hosts_file):
+            os.remove(self.config.hosts_file)
 
     def start(self):
         """Run service"""
@@ -139,7 +138,7 @@ class DockerHostsService:
         args = []
         args.append(self.config.dnsmasq_executable)
         args.extend(self.config.dnsmasq_parameters)
-        args.append("--hostsdir=%s" % self.config.hosts_folder)
+        args.append("--addn-hosts=%s" % self.config.hosts_file)
 
         process = Popen(shell=True, stdout=PIPE, args=" ".join(args))
         return process
@@ -224,11 +223,12 @@ class DockerHostsService:
         """convert entries into lines of text
         and write them to the hosts file"""
         lines = self.entries_to_lines(entries)
-        filename = self.config.hosts_folder + "/hosts"
+        filename = self.config.hosts_file
         with open(filename, 'w') as hostsfile:
             header = "#  " + filename + "\n"
             hostsfile.write(header)
             hostsfile.write("\n".join(lines) + "\n")
+        self.dnsmasq_process.send_signal(signal.SIGHUP)
 
     def do_hostsfile_update(self, container_ids: list):
         """Write new hosts file"""
@@ -267,7 +267,7 @@ class DockerHostsService:
         self.previous_hostinfo = entries
 
     def update_hosts_file_as_needed(self):
-        """Writes hosts file into temporary folder with new contents, when
+        """Writes into hosts file with new contents, when
         list of running containers changes"""
 
         # we'll assume that docker is up and running to start with
